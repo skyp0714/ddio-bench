@@ -4,6 +4,8 @@
  * Copyright (c) 2020, Alireza Farshin, KTH Royal Institute of Technology - All Rights Reserved
  */
 
+// Compile command: gcc change-ddio.c -o <binary_name> -lpci
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <pci/pci.h>
@@ -41,22 +43,43 @@ struct pci_dev*
 find_ddio_device(uint8_t nic_bus)
 {
 	struct pci_dev* dev;
+	struct pci_dev* best_match = NULL;
+	uint8_t lowest_bus = 0xff;
+
 	for(dev = pacc->devices; dev; dev=dev->next) {
-		pci_fill_info(dev,PCI_FILL_IDENT | PCI_FILL_BASES | PCI_FILL_NUMA_NODE | PCI_FILL_PHYS_SLOT);
-		/* 
+		pci_fill_info(dev, PCI_FILL_IDENT | PCI_FILL_BASES |
+		              PCI_FILL_NUMA_NODE | PCI_FILL_PHYS_SLOT | PCI_FILL_CLASS);
+		/*
 		 * Find the proper PCIe root based on the nic device
 		 * For instance, if the NIC is located on 0000:17:00.0 (i.e., BDF)
 		 * 0x17 is the nic_bus (B)
 		 * 0x00 is the nic_device (D)
 		 * 0x0	is the nic_function (F)
-		 * TODO: Fix this for Haswell, i.e., 03:00.0 -- Dev and Fun might be different
+		 *
+		 * We need to find the Root Port (closest to root complex) that covers nic_bus.
+		 * Multiple bridges in a hierarchy may have the same subordinate bus,
+		 * so we select the one with the lowest bus number.
 		 */
-		if(/*dev->func == 0 && dev->dev == 0  && */pci_read_byte(dev,PCI_SUBORDINATE_BUS) == nic_bus /*&& dev->numa_node==1 && dev->domain==0x10001*/) {
-			return dev;
+		uint8_t subordinate = pci_read_byte(dev, PCI_SUBORDINATE_BUS);
+		uint8_t secondary = pci_read_byte(dev, PCI_SECONDARY_BUS);
+
+		// Check if this bridge covers the nic_bus range
+		if (subordinate == nic_bus &&
+		    secondary <= nic_bus &&
+		    subordinate >= nic_bus) {
+
+			// Select the bridge with the lowest bus number (closest to root)
+			if (dev->bus < lowest_bus) {
+				lowest_bus = dev->bus;
+				best_match = dev;
+			}
 		}
 	}
-	printf("Could not find the proper PCIe root!\n");
-	return NULL;
+
+	if (!best_match) {
+		printf("Could not find the proper PCIe root!\n");
+	}
+	return best_match;
 }
 
 
@@ -160,7 +183,7 @@ int main(void)
   init_pci_access();
 
   /* Define nic_bus and ddio_state */
-  uint8_t nic_bus=0x99, ddio_state=1;
+  uint8_t nic_bus=0x25, ddio_state=1;
 
   struct pci_dev *dev=find_ddio_device(nic_bus);
   print_dev_info(dev);
