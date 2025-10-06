@@ -160,7 +160,7 @@ int main(void)
   init_pci_access();
 
   /* Define nic_bus and ddio_state */
-  uint8_t nic_bus=0x17, ddio_state=0;
+  uint8_t nic_bus=0x99, ddio_state=1;
 
   struct pci_dev *dev=find_ddio_device(nic_bus);
   print_dev_info(dev);
