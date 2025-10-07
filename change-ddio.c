@@ -129,7 +129,7 @@ ddio_enable(uint8_t nic_bus)
                 	exit(1);
         	}
 		val=pci_read_long(dev,SKX_PERFCTRLSTS_0);
-		pci_write_long(dev,SKX_PERFCTRLSTS_0,val|SKX_use_allocating_flow_wr_MASK);
+		pci_write_long(dev,SKX_PERFCTRLSTS_0,(val|SKX_use_allocating_flow_wr_MASK)&(~SKX_nosnoopopwren_MASK));
 		printf("DDIO is enabled!\n");
 	} else
 	{
@@ -152,7 +152,7 @@ ddio_disable(uint8_t nic_bus)
                 	exit(1);
 		}
                 val=pci_read_long(dev,SKX_PERFCTRLSTS_0);
-                pci_write_long(dev,SKX_PERFCTRLSTS_0,val&(~SKX_use_allocating_flow_wr_MASK));
+                pci_write_long(dev,SKX_PERFCTRLSTS_0,(val&(~SKX_use_allocating_flow_wr_MASK))|SKX_nosnoopopwren_MASK);
 		printf("DDIO is disabled!\n");
         } else 
 	{
@@ -183,7 +183,7 @@ int main(void)
   init_pci_access();
 
   /* Define nic_bus and ddio_state */
-  uint8_t nic_bus=0x25, ddio_state=1;
+  uint8_t nic_bus=0x9b, ddio_state=0;
 
   struct pci_dev *dev=find_ddio_device(nic_bus);
   print_dev_info(dev);
