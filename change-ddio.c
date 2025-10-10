@@ -84,12 +84,18 @@ find_ddio_device(uint8_t nic_bus)
 
 
 /*
- * perfctrlsts_0
- * bit 3: NoSnoopOpWrEn -> Should be 1b
- * bit 7: Use_Allocating_Flow_Wr -> Should be 0b
- * Check p. 68 of IntelÂ® XeonÂ® Processor Scalable Family
- * Datasheet, Volume Two: Registers
- * May 2019
+ * perfctrlsts_0 Register (Offset 0x180)
+ *
+ * Bit 7: Use_Allocating_Flow_Wr
+ *   - 1b: DDIO enabled (direct cache injection for PCIe writes)
+ *   - 0b: DDIO disabled (PCIe writes bypass LLC, go to memory)
+ *
+ * Bit 3: NoSnoopOpWrEn (NS enable/disable)
+ *   - 1b: Non-Snoop (NS) writes enabled - PCIe writes go directly to memory
+ *   - 0b: Non-Snoop (NS) writes disabled - PCIe writes go to LLC (last level cache)
+ *
+ * Reference: IntelÂ® XeonÂ® Processor Scalable Family
+ * Datasheet, Volume Two: Registers (May 2019, p. 68)
  * link: https://www.intel.com/content/www/us/en/processors/xeon/scalable/xeon-scalable-datasheet-vol-2.html
  */
 int
@@ -114,50 +120,70 @@ ddio_status(uint8_t nic_bus)
 		return 0;
 }
 
+/*
+ * Configure DDIO and NoSnoop settings
+ *
+ * Parameters:
+ *   nic_bus: PCIe bus number of the NIC device
+ *   use_allocating_flow_wr: DDIO enable (1) / disable (0)
+ *   nosnoopopwren: NS enable for memory write (1) / NS disable for LLC write (0)
+ */
 void
-ddio_enable(uint8_t nic_bus)
+ddio_configure(uint8_t nic_bus, uint8_t use_allocating_flow_wr, uint8_t nosnoopopwren)
 {
-	uint32_t val;
+	uint32_t val_before, val_after, val_new;
 	if(!pacc)
 		init_pci_access();
 
-	if(!ddio_status(nic_bus))
-	{
-		struct pci_dev* dev=find_ddio_device(nic_bus);
-		if(!dev){
-                	printf("No device found!\n");
-                	exit(1);
-        	}
-		val=pci_read_long(dev,SKX_PERFCTRLSTS_0);
-		pci_write_long(dev,SKX_PERFCTRLSTS_0,(val|SKX_use_allocating_flow_wr_MASK)&(~SKX_nosnoopopwren_MASK));
-		printf("DDIO is enabled!\n");
-	} else
-	{
-		printf("DDIO was already enabled!\n");
+	struct pci_dev* dev=find_ddio_device(nic_bus);
+	if(!dev){
+		printf("No device found!\n");
+		exit(1);
 	}
-}
 
-void
-ddio_disable(uint8_t nic_bus)
-{
-	uint32_t val;
-	if(!pacc)
-		init_pci_access();
+	// Read current register value
+	val_before = pci_read_long(dev, SKX_PERFCTRLSTS_0);
+	printf("\n=== BEFORE Configuration ===\n");
+	printf("perfctrlsts_0 register value: 0x%08" PRIx32 "\n", val_before);
+	printf("  Use_Allocating_Flow_Wr (bit 7, DDIO): 0x%02" PRIx32 " (%s)\n",
+	       (val_before & SKX_use_allocating_flow_wr_MASK) >> 7,
+	       (val_before & SKX_use_allocating_flow_wr_MASK) ? "enabled" : "disabled");
+	printf("  NoSnoopOpWrEn (bit 3, NS): 0x%02" PRIx32 " (%s)\n",
+	       (val_before & SKX_nosnoopopwren_MASK) >> 3,
+	       (val_before & SKX_nosnoopopwren_MASK) ? "mem write" : "LLC write");
 
-        if(ddio_status(nic_bus))
-        {
-		struct pci_dev* dev=find_ddio_device(nic_bus);
-		if(!dev){
-                	printf("No device found!\n");
-                	exit(1);
-		}
-                val=pci_read_long(dev,SKX_PERFCTRLSTS_0);
-                pci_write_long(dev,SKX_PERFCTRLSTS_0,(val&(~SKX_use_allocating_flow_wr_MASK))|SKX_nosnoopopwren_MASK);
-		printf("DDIO is disabled!\n");
-        } else 
-	{
-		printf("DDIO was already disabled\n");
+	// Calculate new value
+	val_new = val_before;
+
+	// Set or clear Use_Allocating_Flow_Wr bit (bit 7)
+	if (use_allocating_flow_wr) {
+		val_new |= SKX_use_allocating_flow_wr_MASK;  // Set bit 7 (DDIO enable)
+	} else {
+		val_new &= ~SKX_use_allocating_flow_wr_MASK; // Clear bit 7 (DDIO disable)
 	}
+
+	// Set or clear NoSnoopOpWrEn bit (bit 3)
+	if (nosnoopopwren) {
+		val_new |= SKX_nosnoopopwren_MASK;  // Set bit 3 (NS enable - mem write)
+	} else {
+		val_new &= ~SKX_nosnoopopwren_MASK; // Clear bit 3 (NS disable - LLC write)
+	}
+
+	// Write new value
+	pci_write_long(dev, SKX_PERFCTRLSTS_0, val_new);
+
+	// Read back to verify
+	val_after = pci_read_long(dev, SKX_PERFCTRLSTS_0);
+	printf("\n=== AFTER Configuration ===\n");
+	printf("perfctrlsts_0 register value: 0x%08" PRIx32 "\n", val_after);
+	printf("  Use_Allocating_Flow_Wr (bit 7, DDIO): 0x%02" PRIx32 " (%s)\n",
+	       (val_after & SKX_use_allocating_flow_wr_MASK) >> 7,
+	       (val_after & SKX_use_allocating_flow_wr_MASK) ? "enabled" : "disabled");
+	printf("  NoSnoopOpWrEn (bit 3, NS): 0x%02" PRIx32 " (%s)\n",
+	       (val_after & SKX_nosnoopopwren_MASK) >> 3,
+	       (val_after & SKX_nosnoopopwren_MASK) ? "mem write" : "LLC write");
+
+	printf("\nConfiguration applied successfully!\n");
 }
 
 void
@@ -178,22 +204,47 @@ print_dev_info(struct pci_dev *dev)
 	printf("========================\n");
 }
 
-int main(void)
+int main(int argc, char *argv[])
 {
+  // Check for required command-line arguments
+  if (argc != 4) {
+    printf("Usage: %s <port_num> <use_allocating_flow_wr> <nosnoopopwren>\n", argv[0]);
+    printf("\nArguments:\n");
+    printf("  port_num              : End device port number (hex, e.g., 0x9b or decimal)\n");
+    printf("  use_allocating_flow_wr: DDIO enable (1) / disable (0)\n");
+    printf("  nosnoopopwren         : NS enable for mem write (1) / NS disable for LLC write (0)\n");
+    printf("\nExample:\n");
+    printf("  %s 0x9b 1 0    # Enable DDIO, disable NS (LLC write)\n", argv[0]);
+    printf("  %s 155 0 1     # Disable DDIO, enable NS (mem write)\n", argv[0]);
+    return 1;
+  }
+
+  // Parse command-line arguments
+  uint8_t nic_bus = (uint8_t)strtol(argv[1], NULL, 0);  // Supports both hex (0x9b) and decimal (155)
+  uint8_t use_allocating_flow_wr = (uint8_t)atoi(argv[2]);
+  uint8_t nosnoopopwren = (uint8_t)atoi(argv[3]);
+
+  // Validate bit arguments
+  if (use_allocating_flow_wr > 1 || nosnoopopwren > 1) {
+    printf("Error: use_allocating_flow_wr and nosnoopopwren must be 0 or 1\n");
+    return 1;
+  }
+
+  printf("Configuration parameters:\n");
+  printf("  Port number (nic_bus): 0x%02x (%d)\n", nic_bus, nic_bus);
+  printf("  Use_Allocating_Flow_Wr (DDIO): %d (%s)\n",
+         use_allocating_flow_wr, use_allocating_flow_wr ? "enable" : "disable");
+  printf("  NoSnoopOpWrEn (NS): %d (%s)\n",
+         nosnoopopwren, nosnoopopwren ? "mem write" : "LLC write");
+
   init_pci_access();
 
-  /* Define nic_bus and ddio_state */
-  uint8_t nic_bus=0x9b, ddio_state=0;
-
-  struct pci_dev *dev=find_ddio_device(nic_bus);
+  struct pci_dev *dev = find_ddio_device(nic_bus);
   print_dev_info(dev);
 
-  if(ddio_state) {
-	  ddio_enable(nic_bus);
-  } else {
-	  ddio_disable(nic_bus);
-  }
-    
+  // Configure DDIO and NoSnoop settings
+  ddio_configure(nic_bus, use_allocating_flow_wr, nosnoopopwren);
+
   pci_cleanup(pacc);		/* Close everything */
   return 0;
 }
